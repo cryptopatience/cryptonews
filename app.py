@@ -135,6 +135,14 @@ st.markdown(f"""
 with st.sidebar:
     st.markdown("### ⚙️ 설정")
     use_ai = st.toggle("AI 요약 생성", value=bool(GEMINI_API_KEY or OPENAI_API_KEY))
+    if use_ai:
+        _ai_options = []
+        if GEMINI_API_KEY:   _ai_options.append("Gemini 2.5 Pro")
+        if OPENAI_API_KEY:   _ai_options.append("GPT-4o-mini")
+        if not _ai_options:  _ai_options = ["(API 키 없음)"]
+        ai_provider = st.selectbox("AI 제공자", _ai_options)
+    else:
+        ai_provider = ""
     st.markdown("---")
     st.markdown("**수집 소스**")
     src_cryptopanic  = st.checkbox("CryptoPanic API", value=bool(CRYPTOPANIC_API_KEY))
@@ -160,12 +168,38 @@ def src_color(source: str) -> str:
     return "#8b949e"
 
 
+def _strip_html(text: str) -> str:
+    if not text:
+        return ""
+    cleaned = BeautifulSoup(text, "html.parser").get_text(separator=" ")
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def sanitize(text: str) -> str:
+    """HTML 구조를 깨는 문자를 제거 (html.escape 대신 사용)
+    html.escape()는 <를 &lt; 등으로 인코딩하는데,
+    이 인코딩된 문자열이 unsafe_allow_html=True인 st.markdown() f-string 안에
+    들어가면 HTML 블록 전체가 텍스트로 fallback되는 문제가 생긴다.
+    따라서 꺾쇠 등 위험 문자는 아예 제거한다.
+    """
+    if not text:
+        return ""
+    return (
+        text
+        .replace("<", "")
+        .replace(">", "")
+        .replace('"', "'")
+        .replace("`", "")
+        .strip()
+    )
+
+
 def make_item(title, url="", source="", published_at="", description=""):
     return {
         "title": re.sub(r"\s+", " ", title).strip(),
         "url": url, "source": source,
         "published_at": published_at,
-        "description": (description or "").strip(),
+        "description": _strip_html(description or ""),
     }
 
 
@@ -501,12 +535,15 @@ def summarize_openai(news_list: list, api_key: str):
 # ── 뉴스 카드 렌더링 ────────────────────────────
 
 def render_news_card(item: dict, idx: int):
-    import html as _html
-    title  = _html.escape(item.get("title", "") or "")
+    # ✅ html.escape() 대신 sanitize() 사용
+    # html.escape()는 < → &lt; 등으로 인코딩하는데,
+    # 이 값이 unsafe_allow_html=True f-string 안에 들어가면
+    # Streamlit HTML 파서가 블록 전체를 텍스트로 fallback시킨다.
+    title  = sanitize(item.get("title", ""))
     url    = item.get("url", "")
-    source = item.get("source", "")
+    source = sanitize(item.get("source", ""))
     pub    = item.get("published_at", "")
-    desc   = _html.escape((item.get("description", "") or "").strip())
+    desc   = sanitize((item.get("description", "") or "").strip())
     color  = src_color(source)
     kst    = utc_to_kst(pub)
 
@@ -588,13 +625,13 @@ if run_btn:
         st.session_state.provider      = ""
 
         if use_ai and all_news:
-            if GEMINI_API_KEY:
+            if ai_provider == "Gemini 2.5 Pro" and GEMINI_API_KEY:
                 st.write("🤖 Gemini 2.5 Pro로 AI 요약 생성 중...")
                 q, d = summarize_gemini(all_news, GEMINI_API_KEY)
                 st.session_state.summary_quick = q
                 st.session_state.summary_deep  = d
                 st.session_state.provider      = "Gemini 2.5 Pro"
-            elif OPENAI_API_KEY:
+            elif ai_provider == "GPT-4o-mini" and OPENAI_API_KEY:
                 st.write("🤖 GPT-4o-mini로 AI 요약 생성 중...")
                 q, d = summarize_openai(all_news, OPENAI_API_KEY)
                 st.session_state.summary_quick = q
